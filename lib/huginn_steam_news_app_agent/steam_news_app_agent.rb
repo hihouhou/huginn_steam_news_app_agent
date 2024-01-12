@@ -44,27 +44,30 @@ module Agents
     def default_options
       {
         'debug' => 'false',
-        'emit_events' => 'true',
         'expected_receive_period_in_days' => '2',
-        'changes_only' => 'true',
         'app_id' => '',
+        'language' => 'en',
         'limit' => '',
         'max_length' => '',
+        'community_announcements_only' => 'true',
         'patchnotes_only' => 'true'
       }
     end
 
     form_configurable :debug, type: :boolean
-    form_configurable :emit_events, type: :boolean
     form_configurable :expected_receive_period_in_days, type: :string
-    form_configurable :changes_only, type: :boolean
     form_configurable :app_id, type: :string
+    form_configurable :language, type: :string
     form_configurable :limit, type: :string
     form_configurable :max_length, type: :string
     form_configurable :patchnotes_only, type: :boolean
+    form_configurable :community_announcements_only, type: :boolean
     def validate_options
       unless options['app_id'].present?
         errors.add(:base, "app_id is a required field")
+      end
+      unless options['language'].present?
+        errors.add(:base, "language is a required field")
       end
       unless options['limit'].present?
         errors.add(:base, "limit is a required field")
@@ -75,12 +78,9 @@ module Agents
       if options.has_key?('patchnotes_only') && boolify(options['patchnotes_only']).nil?
         errors.add(:base, "if provided, patchnotes_only must be true or false")
       end
-      if options.has_key?('emit_events') && boolify(options['emit_events']).nil?
-        errors.add(:base, "if provided, emit_events must be true or false")
-      end
 
-      if options.has_key?('changes_only') && boolify(options['changes_only']).nil?
-        errors.add(:base, "if provided, changes_only must be true or false")
+      if options.has_key?('community_announcements_only') && boolify(options['community_announcements_only']).nil?
+        errors.add(:base, "if provided, community_announcements_only must be true or false")
       end
 
       if options.has_key?('debug') && boolify(options['debug']).nil?
@@ -115,7 +115,7 @@ module Agents
 
     def query_steam()
       url = URI("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/")
-      params = { :appid => interpolated['app_id'], :count => interpolated['limit'], :maxlength => interpolated['max_length'] }
+      params = { :appid => interpolated['app_id'], :count => interpolated['limit'], :maxlength => interpolated['max_length'] , :language => interpolated['language']}
       url.query = URI.encode_www_form(params)
       
       http = Net::HTTP.new(url.host, url.port)
@@ -129,51 +129,40 @@ module Agents
 
       payload = JSON.parse(response.body)
 
-      if interpolated['changes_only'] == 'true'
-        if payload.to_s != memory['last_status']
-          if "#{memory['last_status']}" == ''
-            payload['appnews']['newsitems'].each do |item|
-			  if interpolated['patchnotes_only'] == 'false' || ( !item['tags'].nil? && item['tags'].include?("patchnotes") && interpolated['patchnotes_only'] == 'true')
-                create_event payload: item
-			  end
-            end
-          else
-            last_status = memory['last_status'].gsub("=>", ": ").gsub(": nil", ": null")
-            last_status = JSON.parse(last_status)
-            payload['appnews']['newsitems'].each do | item |
-              found = false
+      if payload != memory['last_status']
+        payload['appnews']['newsitems'].each do | item |
+          found = false
+          if interpolated['debug'] == 'true'
+            log item
+            log "found is #{found}"
+          end
+          if !memory['last_status'].nil? and memory['last_status']['appnews']['newsitems'].present?
+            last_status = memory['last_status']
+            last_status['appnews']['newsitems'].each do | itembis|
+              if item == itembis
+                found = true
+              end
               if interpolated['debug'] == 'true'
-                log item
                 log "found is #{found}"
-              end
-              last_status['appnews']['newsitems'].each do | itembis|
-                if item == itembis
-                  found = true
-                end
-                if interpolated['debug'] == 'true'
-                  log "found is #{found}"
-                end
-              end
-              if found == false && (interpolated['patchnotes_only'] == 'false' || ( !item['tags'].nil? && item['tags'].include?("patchnotes") && interpolated['patchnotes_only'] == 'true'))
-                if interpolated['debug'] == 'true'
-                  log "event created"
-                end
-                create_event payload: item
-              else
-                if interpolated['debug'] == 'true'
-                  log "event not created"
-                end
               end
             end
           end
-          memory['last_status'] = payload.to_s
+#          if found == false && (interpolated['patchnotes_only'] == 'false' || ( !item['tags'].nil? && item['tags'].include?("patchnotes") && interpolated['patchnotes_only'] == 'true'))
+          if found == false && (interpolated['community_announcements_only'] == 'false' || (interpolated['community_announcements_only'] == 'true' && item['feed_type'] == 1)) && (interpolated['patchnotes_only'] == 'false' || ( !item['tags'].nil? && item['tags'].include?("patchnotes") && interpolated['patchnotes_only'] == 'true'))
+            if interpolated['debug'] == 'true'
+              log "event created"
+            end
+            create_event payload: item
+          else
+            if interpolated['debug'] == 'true'
+              log "event not created"
+            end
+          end
         end
+        memory['last_status'] = payload
       else
-        if payload.to_s != memory['last_status']
-          memory['last_status']= payload.to_s
-        end
-        payload['appnews']['newsitems'].each do |item|
-          create_event payload: item
+        if interpolated['debug'] == 'true'
+          log "no diff"
         end
       end
     end
